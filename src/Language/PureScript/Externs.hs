@@ -97,6 +97,7 @@ data ExternsTypeFixity = ExternsTypeFixity
 -- | A type or value declaration appearing in an externs file
 data ExternsDeclaration =
   -- | A type declaration
+  -- | data X = Y | Z
     EDType
       { edTypeName                :: ProperName 'TypeName
       , edTypeKind                :: SourceKind
@@ -142,7 +143,7 @@ data ExternsDeclaration =
   | EDKind
       { edKindName                :: ProperName 'KindName
       }
-  deriving Show
+  deriving (Show, Eq)
 
 -- | Convert an externs file back into a module
 applyExternsFileToEnvironment :: ExternsFile -> Environment -> Environment

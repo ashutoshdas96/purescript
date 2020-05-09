@@ -1,6 +1,8 @@
 module Language.PureScript.Make.BuildPlan
-  ( BuildPlan()
+  ( BuildPlan(..)
+  , Prebuilt(..)
   , construct
+  , constructSingle
   , getResult
   , collectErrors
   , collectResults
@@ -12,6 +14,7 @@ import           Prelude
 
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
+import           Control.Monad.Base
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
 import           Data.Aeson (decode)
 import qualified Data.Map as M
@@ -97,6 +100,18 @@ getResult buildPlan moduleName =
       pure (Just (MultipleErrors [], pbExternsFile es))
     Nothing ->
       readMVar $ bjResult $ fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+
+constructSingle
+  :: MonadBase IO m
+  => [Module]
+  -> M.Map ModuleName Prebuilt
+  -> m BuildPlan
+constructSingle ms pb = do
+  buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
+  return $ BuildPlan
+    { bpPrebuilt = M.delete (getModuleName $ head ms) pb
+    , bpBuildJobs = M.singleton (getModuleName $ head ms) buildJob
+    }
 
 -- | Constructs a BuildPlan for the given module graph.
 --

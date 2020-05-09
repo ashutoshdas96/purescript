@@ -229,6 +229,9 @@ data ErrorMessage = ErrorMessage
 data Module = Module SourceSpan [Comment] ModuleName [Declaration] (Maybe [DeclarationRef])
   deriving (Show)
 
+instance Eq Module where
+  m1 == m2 = (getModuleName m1) == (getModuleName m2)
+
 -- | Return a module's name.
 getModuleName :: Module -> ModuleName
 getModuleName (Module _ _ name _ _) = name

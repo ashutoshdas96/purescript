@@ -20,9 +20,9 @@ import           Control.Monad.Writer.Class (MonadWriter(..))
 import           Data.Aeson (encode)
 import           Data.Function (on)
 import           Data.Foldable (for_)
-import           Data.List (foldl', sortBy)
+import           Data.List (foldl', sortBy, union)
 import qualified Data.List.NonEmpty as NEL
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe, isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import           Language.PureScript.AST
@@ -86,18 +86,32 @@ rebuildModule MakeActions{..} externs m@(Module _ _ moduleName _ _) = do
 make :: forall m. (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
      => MakeActions m
      -> [Module]
-     -> m [ExternsFile]
-make ma@MakeActions{..} ms = do
+     -> Maybe ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
+     -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
+make ma@MakeActions{..} ms previous = do
   checkModuleNames
 
-  (sorted, graph) <- sortModules ms
+  (sorted, graph) <-
+    if isJust previous
+      then let Just (_, pm, pg, _) = previous
+          in return (pm, pg)
+      else sortModules ms
 
-  buildPlan <- BuildPlan.construct ma (sorted, graph)
+  let s = if isJust previous
+             then ms
+             else sorted
 
-  let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName) sorted
+  buildPlan <-
+    if isJust previous
+        then do
+          let Just (_, _, _, pb) = previous
+          BuildPlan.constructSingle ms pb
+        else  BuildPlan.construct ma (s, graph)
+
+  let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName) s
   for_ toBeRebuilt $ \m -> fork $ do
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
-    buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName sorted)
+    buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName (union s sorted))
 
   -- Wait for all threads to complete, and collect errors.
   errors <- BuildPlan.collectErrors buildPlan
@@ -112,9 +126,18 @@ make ma@MakeActions{..} ms = do
   -- so they can be folded into an Environment. This result is used in the tests
   -- and in PSCI.
   let lookupResult mn = fromMaybe (internalError "make: module not found in results") (M.lookup mn results)
-  return (map (lookupResult . getModuleName) sorted)
+
+  prebuilt <- M.traverseWithKey prebuiltPrevious results
+
+  return (map (lookupResult . getModuleName) sorted, sorted, graph, prebuilt )
 
   where
+
+  prebuiltPrevious :: ModuleName -> ExternsFile -> m BuildPlan.Prebuilt
+  prebuiltPrevious k mn = do
+    (Just outputTimestamp) <- getOutputTimestamp k
+    return $ BuildPlan.Prebuilt outputTimestamp mn
+
   checkModuleNames :: m ()
   checkModuleNames = checkNoPrim *> checkModuleNamesAreUnique
 
