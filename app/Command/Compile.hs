@@ -39,6 +39,7 @@ data PSCMakeOptions = PSCMakeOptions
   , pscmUsePrefix    :: Bool
   , pscmJSONErrors   :: Bool
   , pscmWatch        :: Bool
+  , pscmWarnings     :: Bool
   }
 
 -- | Argumnets: verbose, use JSON, warnings, errors
@@ -71,16 +72,22 @@ compile psc@PSCMakeOptions{..} = do
   (externs, sorted, graph, prebuilt) <- compileF psc input
   emptyVar <- newEmptyMVar
   putMVar emptyVar (externs, sorted, graph, prebuilt)
-  when pscmWatch $ do
-    withManager $ \mgr -> do
-      watchTree
-        mgr
-        "./src"
-        (const True)
-        (recompile psc emptyVar)
-      forever $ threadDelay 1000000
+  if pscmWatch
+     then do
+        withManager $ \mgr -> do
+          watchTree
+            mgr
+            "./src"
+            (const True)
+            (recompile psc emptyVar)
+          forever $ threadDelay 1000000
+     else exitSuccess
 
---recompile :: PSCMakeOptions -> ([ExternsFile], [Module], P.ModuleGraph) -> FilePath -> IO ()
+recompile
+  :: PSCMakeOptions
+  -> MVar ([P.ExternsFile], [P.Module], P.ModuleGraph, M.Map P.ModuleName Prebuilt)
+  -> Event
+  -> IO ()
 recompile psc@PSCMakeOptions{..} mvar event = do
   let fp = eventPath event
   putStrLn "recompiling ..."
@@ -169,6 +176,12 @@ isWatch = Opts.switch $
      Opts.long "watch"
   <> Opts.help "Watch source map"
 
+isWarningsDisabled :: Opts.Parser Bool
+isWarningsDisabled = Opts.switch $
+     Opts.short 'w'
+  <> Opts.long "disable-warnings"
+  <> Opts.help "Disable display of warnings"
+
 codegenTargets :: Opts.Parser [P.CodegenTarget]
 codegenTargets = Opts.option targetParser $
      Opts.short 'g'
@@ -210,6 +223,7 @@ pscMakeOptions = PSCMakeOptions <$> many inputFile
                                 <*> (not <$> noPrefix)
                                 <*> jsonErrors
                                 <*> isWatch
+                                <*> isWarningsDisabled
 
 command :: Opts.Parser (IO ())
 command = compile <$> (Opts.helper <*> pscMakeOptions)

@@ -108,8 +108,9 @@ constructSingle
   -> m BuildPlan
 constructSingle ms pb = do
   buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
+  let m = head ms
   return $ BuildPlan
-    { bpPrebuilt = M.delete (getModuleName $ head ms) pb
+    { bpPrebuilt = M.delete (getModuleName m) pb
     , bpBuildJobs = M.singleton (getModuleName $ head ms) buildJob
     }
 

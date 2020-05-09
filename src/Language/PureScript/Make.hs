@@ -13,6 +13,7 @@ import           Prelude.Compat
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
 import           Control.Monad.Error.Class (MonadError(..))
+import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -122,11 +123,25 @@ make ma@MakeActions{..} ms previous = do
   -- Collect all ExternsFiles
   results <- BuildPlan.collectResults buildPlan
 
+  -- Check If dependencies of module changed to be rebuild explicitly in watch mode
+  -- based on the current and previous externsFile
+  when (isJust previous) $ do
+    let Just (_, _, _, pb) = previous
+        prevExternFile = BuildPlan.pbExternsFile <$> M.lookup (getModuleName $ head ms) pb
+        currentExternFile = M.lookup (getModuleName $ head ms) results
+        prevDecl = efDeclarations <$> prevExternFile
+        currDecl = efDeclarations <$> currentExternFile
+    if prevDecl == currDecl
+       then liftBase $ putStrLn "No need to rebuild the dependecies"
+       else liftBase $ putStrLn "TODO: Have to rebuild"
+
   -- Here we return all the ExternsFile in the ordering of the topological sort,
   -- so they can be folded into an Environment. This result is used in the tests
   -- and in PSCI.
   let lookupResult mn = fromMaybe (internalError "make: module not found in results") (M.lookup mn results)
 
+  -- Compute the new prebuilt that will be used for next run in case of
+  -- watch.
   prebuilt <- M.traverseWithKey prebuiltPrevious results
 
   return (map (lookupResult . getModuleName) sorted, sorted, graph, prebuilt )
