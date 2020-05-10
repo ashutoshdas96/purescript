@@ -1,11 +1,14 @@
 module Language.PureScript.Make.BuildPlan
   ( BuildPlan(..)
   , Prebuilt(..)
+  , addBuildPlan
+  , build
   , construct
   , constructSingle
   , getResult
   , collectErrors
   , collectResults
+  , empty
   , markComplete
   , needsRebuild
   ) where
@@ -20,6 +23,7 @@ import           Data.Aeson (decode)
 import qualified Data.Map as M
 import           Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Text as T
+import           Data.Time.Clock
 import           Data.Time.Clock (UTCTime)
 import           Data.Version (showVersion)
 import           Language.PureScript.AST
@@ -108,11 +112,13 @@ constructSingle
   -> m BuildPlan
 constructSingle ms pb = do
   buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
-  let m = head ms
-  return $ BuildPlan
-    { bpPrebuilt = M.delete (getModuleName m) pb
-    , bpBuildJobs = M.singleton (getModuleName $ head ms) buildJob
-    }
+  let bp = foldl (\ac cm -> M.delete (getModuleName cm) ac) pb ms
+  buildJobs <- foldM makeBuildJob M.empty (map getModuleName ms)
+  pure $ BuildPlan bp buildJobs
+  where
+    makeBuildJob prev moduleName = do
+      buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
+      pure (M.insert moduleName buildJob prev)
 
 -- | Constructs a BuildPlan for the given module graph.
 --
@@ -174,3 +180,21 @@ decodeExterns bs = do
   externs <- decode bs
   guard $ T.unpack (efVersion externs) == showVersion Paths.version
   return externs
+
+addBuildPlan :: BuildPlan -> BuildPlan -> BuildPlan
+addBuildPlan b1 b2 =
+  BuildPlan (M.union (bpPrebuilt b1) (bpPrebuilt b2)) (M.union (bpBuildJobs b1) (bpBuildJobs b2))
+
+empty :: BuildPlan
+empty = BuildPlan M.empty M.empty
+
+build :: forall m. (Monad m, MonadBaseControl IO m)
+      => ModuleName
+      -> ExternsFile
+      -> m BuildPlan
+build m e = do
+  timestamp <- liftBase getCurrentTime
+  buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
+  let pb = M.singleton m $ Prebuilt timestamp e
+      pbj = M.singleton m buildJob
+  return $ BuildPlan pb pbj

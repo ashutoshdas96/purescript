@@ -12,16 +12,17 @@ import           Prelude.Compat
 
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
-import           Control.Monad.Error.Class (MonadError(..))
 import           Control.Monad.Base
+import           Control.Monad.Error.Class (MonadError(..))
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply
+import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
 import           Control.Monad.Writer.Class (MonadWriter(..))
 import           Data.Aeson (encode)
 import           Data.Function (on)
-import           Data.Foldable (for_)
-import           Data.List (foldl', sortBy, union)
+import           Data.Foldable (for_, foldlM)
+import           Data.List (foldl', sortBy, union, elem, last, head)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Maybe (fromMaybe, isJust)
 import qualified Data.Map as M
@@ -88,7 +89,7 @@ make :: forall m. (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, 
      => MakeActions m
      -> [Module]
      -> Maybe ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
-     -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
+     -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt, [Module])
 make ma@MakeActions{..} ms previous = do
   checkModuleNames
 
@@ -125,15 +126,22 @@ make ma@MakeActions{..} ms previous = do
 
   -- Check If dependencies of module changed to be rebuild explicitly in watch mode
   -- based on the current and previous externsFile
-  when (isJust previous) $ do
-    let Just (_, _, _, pb) = previous
-        prevExternFile = BuildPlan.pbExternsFile <$> M.lookup (getModuleName $ head ms) pb
-        currentExternFile = M.lookup (getModuleName $ head ms) results
-        prevDecl = efDeclarations <$> prevExternFile
-        currDecl = efDeclarations <$> currentExternFile
-    if prevDecl == currDecl
-       then liftBase $ putStrLn "No need to rebuild the dependecies"
-       else liftBase $ putStrLn "TODO: Have to rebuild"
+  let allResults =
+        if (isJust previous)
+          then do
+            let Just (_, oldM, _, pb) = previous
+                mn = getModuleName $ head ms
+                prevExternFile = BuildPlan.pbExternsFile <$> M.lookup mn pb
+                currentExternFile = M.lookup mn results
+                prevDecl = efDeclarations <$> prevExternFile
+                currDecl = efDeclarations <$> currentExternFile
+            if prevDecl == currDecl
+              then []
+              else do
+                let graphN = filter (\(_, g) -> elem mn g) graph
+                    toM = map (\(m, _) -> m) graphN
+                filter (\oms -> elem (getModuleName oms) toM) oldM
+        else []
 
   -- Here we return all the ExternsFile in the ordering of the topological sort,
   -- so they can be folded into an Environment. This result is used in the tests
@@ -144,7 +152,7 @@ make ma@MakeActions{..} ms previous = do
   -- watch.
   prebuilt <- M.traverseWithKey prebuiltPrevious results
 
-  return (map (lookupResult . getModuleName) sorted, sorted, graph, prebuilt )
+  return (map (lookupResult . getModuleName) sorted, sorted, graph, prebuilt, allResults )
 
   where
 

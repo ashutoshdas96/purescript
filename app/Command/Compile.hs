@@ -9,9 +9,11 @@ module Command.Compile (command) where
 import           Control.Concurrent
 import           Control.Applicative
 import           Control.Monad
+import           Control.Monad.IO.Class
 import qualified Data.Aeson as A
 import           Data.Bool (bool)
 import qualified Data.ByteString.Lazy.UTF8 as LBU8
+import           Data.IORef
 import           Data.List (intercalate)
 import qualified Data.Map as M
 import           Data.Maybe (fromJust, isNothing)
@@ -69,7 +71,8 @@ compile psc@PSCMakeOptions{..} = do
                              , "Usage: For basic information, try the `--help' option."
                              ]
     exitFailure
-  (externs, sorted, graph, prebuilt) <- compileF psc input
+  fpRef <- newIORef (M.empty, M.empty)
+  (externs, sorted, graph, prebuilt) <- compileF psc input fpRef
   emptyVar <- newEmptyMVar
   putMVar emptyVar (externs, sorted, graph, prebuilt)
   if pscmWatch
@@ -79,42 +82,70 @@ compile psc@PSCMakeOptions{..} = do
             mgr
             "./src"
             (const True)
-            (recompile psc emptyVar)
+            (recompile psc emptyVar fpRef)
           forever $ threadDelay 1000000
      else exitSuccess
 
 recompile
   :: PSCMakeOptions
   -> MVar ([P.ExternsFile], [P.Module], P.ModuleGraph, M.Map P.ModuleName Prebuilt)
+  -> IORef (M.Map P.ModuleName (Either RebuildPolicy FilePath)
+           , M.Map P.ModuleName FilePath
+           )
   -> Event
   -> IO ()
-recompile psc@PSCMakeOptions{..} mvar event = do
+recompile psc@PSCMakeOptions{..} mvar fpRef event = do
   let fp = eventPath event
   putStrLn "recompiling ..."
-  prev@(_, _, _, pe) <- readMVar mvar
+  prev@(_, _, _, pe) <- takeMVar mvar
   moduleFiles <- readInput [fp]
+  (oldFp, oldForeign) <- readIORef fpRef
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
+
     let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, Right fp)) ms
     foreigns <- inferForeignModules filePathMap
+
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    P.make makeActions (map snd ms) (Just prev)
+    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev)
+
+    isE <- liftIO $ isEmptyMVar mvar
+    when isE $ liftIO $ putMVar mvar (a, b, c, d)
+
+    let pmakeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
+    (a', b', c', d', _) <- P.make pmakeActions e (Just (a, b, c, d))
+
+    return $ (a', b', c', d')
   val <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmJSONErrors makeWarnings makeErrors
   case val of
-    Just x -> putMVar mvar x
-    Nothing -> putMVar mvar prev
+    Just x -> do
+      _ <- takeMVar mvar
+      putMVar mvar x
+    Nothing -> do
+      isE <- isEmptyMVar mvar
+      print "inside error path"
+      print isE
+      when isE $ putMVar mvar prev
+  putStrLn "recompiling completed ..."
 
 compileF ::
-  PSCMakeOptions -> [FilePath] -> IO ([P.ExternsFile], [P.Module], P.ModuleGraph, M.Map P.ModuleName Prebuilt)
-compileF PSCMakeOptions {..} input = do
+    PSCMakeOptions
+    -> [FilePath]
+    -> IORef (M.Map P.ModuleName (Either RebuildPolicy FilePath)
+           , M.Map P.ModuleName FilePath
+           )
+    -> IO ([P.ExternsFile], [P.Module], P.ModuleGraph, M.Map P.ModuleName Prebuilt)
+compileF PSCMakeOptions {..} input fpRef = do
   moduleFiles <- readInput input
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
     let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, Right fp)) ms
     foreigns <- inferForeignModules filePathMap
+    liftIO $ writeIORef fpRef (filePathMap, foreigns)
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    P.make makeActions (map snd ms) Nothing
+    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing
+    return $ (a, b, c, d)
   bo <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmJSONErrors makeWarnings makeErrors
   when (isNothing bo) $ exitFailure
