@@ -31,7 +31,7 @@ import           Language.PureScript.Crash
 import           Language.PureScript.Errors
 import           Language.PureScript.Externs
 import           Language.PureScript.Make.Actions as Actions
-import           Language.PureScript.Names (ModuleName)
+import           Language.PureScript.Names (ModuleName, moduleNameFromString)
 import qualified Paths_purescript as Paths
 
 -- | The BuildPlan tracks information about our build progress, and holds all
@@ -44,7 +44,7 @@ data BuildPlan = BuildPlan
 data Prebuilt = Prebuilt
   { pbModificationTime :: UTCTime
   , pbExternsFile :: ExternsFile
-  }
+  } deriving Show
 
 data BuildJob = BuildJob
   { bjResult :: C.MVar (Maybe (MultipleErrors, ExternsFile))

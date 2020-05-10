@@ -12,7 +12,6 @@ import           Prelude.Compat
 
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
-import           Control.Monad.Base()
 import           Control.Monad.Error.Class (MonadError(..))
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply

@@ -14,9 +14,9 @@ import qualified Data.Aeson as A
 import           Data.Bool (bool)
 import qualified Data.ByteString.Lazy.UTF8 as LBU8
 import           Data.IORef
-import           Data.List (intercalate)
+import           Data.List (intercalate, union)
 import qualified Data.Map as M
-import           Data.Maybe (fromJust, isNothing)
+import           Data.Maybe (fromJust, isNothing, catMaybes)
 import qualified Data.Set as S
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -45,7 +45,7 @@ data PSCMakeOptions = PSCMakeOptions
   }
 
 -- | Argumnets: verbose, hide warnings, use JSON, warnings, errors
-printWarningsAndErrors :: Bool -> Bool -> Bool -> P.MultipleErrors -> Either P.MultipleErrors a -> IO (Maybe a)
+printWarningsAndErrors :: Bool -> Bool -> Bool -> P.MultipleErrors -> Either P.MultipleErrors a -> IO ([P.ModuleName], Maybe a)
 printWarningsAndErrors verbose hide False warnings errors = do
   pwd <- getCurrentDirectory
   cc <- bool Nothing (Just P.defaultCodeColor) <$> ANSI.hSupportsANSI stderr
@@ -55,13 +55,14 @@ printWarningsAndErrors verbose hide False warnings errors = do
   case errors of
     Left errs -> do
       hPutStrLn stderr (P.prettyPrintMultipleErrors ppeOpts errs)
-      return Nothing
-    Right a -> return $ Just a
+      return (catMaybes $ map P.errorModule $ P.runMultipleErrors errs, Nothing)
+    Right a -> return $ ([], Just a)
 printWarningsAndErrors verbose _ True warnings errors = do
   hPutStrLn stderr . LBU8.toString . A.encode $
     JSONResult (toJSONErrors verbose P.Warning warnings)
                (either (toJSONErrors verbose P.Error) (const []) errors)
-  return $ either (const Nothing) Just errors
+  return $ ([], Nothing)
+  return $ either ((,Nothing) . catMaybes . map P.errorModule . P.runMultipleErrors) (([],) . Just) errors
 
 compile :: PSCMakeOptions -> IO ()
 compile psc@PSCMakeOptions{..} = do
@@ -76,7 +77,7 @@ compile psc@PSCMakeOptions{..} = do
   emptyVar <- newEmptyMVar
   putMVar emptyVar (externs, sorted, graph, prebuilt)
 
-  errorRef <- newIORef False
+  errorRef <- newIORef ([], False)
   if pscmWatch
      then do
         withManager $ \mgr -> do
@@ -94,16 +95,24 @@ recompile
   -> IORef (M.Map P.ModuleName (Either RebuildPolicy FilePath)
            , M.Map P.ModuleName FilePath
            )
-  -> IORef Bool
+  -> IORef ([P.ModuleName], Bool)
   -> Event
   -> IO ()
 recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
   let fp = eventPath event
   putStrLn "recompiling ..."
-  prev <- takeMVar mvar
+
   moduleFiles <- readInput [fp]
+
+  prev <- takeMVar mvar
+
+  (errModuleNames, prE) <- readIORef errorRef
   (oldFp, oldForeign) <- readIORef fpRef
-  prE <- readIORef errorRef
+
+  errCaseModules <- if not $ null errModuleNames
+                      then readInput $ getFilePaths errModuleNames oldFp fp
+                      else return []
+
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
 
@@ -115,21 +124,28 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
 
     liftIO $ putMVar mvar (a, b, c, d)
 
+    oldMs <- P.parseModulesFromFiles id errCaseModules
+
+    let nextModules m = flip union m . map snd $ oldMs
+
     let pmakeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
-    (a', b', c', d', _) <- P.make pmakeActions e (Just (a, b, c, d)) prE
+    (a', b', c', d', _) <- P.make pmakeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE
 
     return $ (a', b', c', d')
-  val <-
+
+  (errs, prevS) <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors
-  case val of
+
+  case prevS of
     Just x -> do
       _ <- takeMVar mvar
       putMVar mvar x
-      writeIORef errorRef False
+      writeIORef errorRef (errs, False)
     Nothing -> do
       isE <- isEmptyMVar mvar
       when isE $ putMVar mvar prev
-      writeIORef errorRef True
+      writeIORef errorRef (errs, True)
+
   putStrLn "recompiling completed ..."
 
 compileF ::
@@ -149,7 +165,7 @@ compileF PSCMakeOptions {..} input fpRef = do
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
     (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False
     return $ (a, b, c, d)
-  bo <-
+  (_, bo) <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors
   when (isNothing bo) $ exitFailure
   return $ fromJust bo
@@ -168,6 +184,16 @@ globWarningOnMisses warn = concatMapM globWithWarning
 
 readInput :: [FilePath] -> IO [(FilePath, Text)]
 readInput inputFiles = forM inputFiles $ \inFile -> (inFile, ) <$> readUTF8FileT inFile
+
+getFilePaths :: [P.ModuleName] -> M.Map P.ModuleName (Either RebuildPolicy FilePath) -> FilePath -> [FilePath]
+getFilePaths ms oldMap fp = do
+  let lookupResult mn =
+            either
+              (P.internalError "make: module not found in results")
+              id
+              (fromJust $ M.lookup mn oldMap)
+
+  filter ((/=) fp) $ map lookupResult ms
 
 inputFile :: Opts.Parser FilePath
 inputFile = Opts.strArgument $
