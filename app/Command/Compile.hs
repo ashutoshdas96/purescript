@@ -44,20 +44,20 @@ data PSCMakeOptions = PSCMakeOptions
   , pscmWarnings     :: Bool
   }
 
--- | Argumnets: verbose, use JSON, warnings, errors
-printWarningsAndErrors :: Bool -> Bool -> P.MultipleErrors -> Either P.MultipleErrors a -> IO (Maybe a)
-printWarningsAndErrors verbose False warnings errors = do
+-- | Argumnets: verbose, hide warnings, use JSON, warnings, errors
+printWarningsAndErrors :: Bool -> Bool -> Bool -> P.MultipleErrors -> Either P.MultipleErrors a -> IO (Maybe a)
+printWarningsAndErrors verbose hide False warnings errors = do
   pwd <- getCurrentDirectory
   cc <- bool Nothing (Just P.defaultCodeColor) <$> ANSI.hSupportsANSI stderr
   let ppeOpts = P.defaultPPEOptions { P.ppeCodeColor = cc, P.ppeFull = verbose, P.ppeRelativeDirectory = pwd }
-  when (P.nonEmpty warnings) $
+  when (P.nonEmpty warnings && not hide) $
     hPutStrLn stderr (P.prettyPrintMultipleWarnings ppeOpts warnings)
   case errors of
     Left errs -> do
       hPutStrLn stderr (P.prettyPrintMultipleErrors ppeOpts errs)
       return Nothing
     Right a -> return $ Just a
-printWarningsAndErrors verbose True warnings errors = do
+printWarningsAndErrors verbose _ True warnings errors = do
   hPutStrLn stderr . LBU8.toString . A.encode $
     JSONResult (toJSONErrors verbose P.Warning warnings)
                (either (toJSONErrors verbose P.Error) (const []) errors)
@@ -75,6 +75,8 @@ compile psc@PSCMakeOptions{..} = do
   (externs, sorted, graph, prebuilt) <- compileF psc input fpRef
   emptyVar <- newEmptyMVar
   putMVar emptyVar (externs, sorted, graph, prebuilt)
+
+  errorRef <- newIORef False
   if pscmWatch
      then do
         withManager $ \mgr -> do
@@ -82,7 +84,7 @@ compile psc@PSCMakeOptions{..} = do
             mgr
             "./src"
             (const True)
-            (recompile psc emptyVar fpRef)
+            (recompile psc emptyVar fpRef errorRef)
           forever $ threadDelay 1000000
      else exitSuccess
 
@@ -92,41 +94,42 @@ recompile
   -> IORef (M.Map P.ModuleName (Either RebuildPolicy FilePath)
            , M.Map P.ModuleName FilePath
            )
+  -> IORef Bool
   -> Event
   -> IO ()
-recompile psc@PSCMakeOptions{..} mvar fpRef event = do
+recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
   let fp = eventPath event
   putStrLn "recompiling ..."
-  prev@(_, _, _, pe) <- takeMVar mvar
+  prev <- takeMVar mvar
   moduleFiles <- readInput [fp]
   (oldFp, oldForeign) <- readIORef fpRef
+  prE <- readIORef errorRef
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
 
-    let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, Right fp)) ms
+    let filePathMap = M.fromList $ map (\(mfp, P.Module _ _ mn _ _) -> (mn, Right mfp)) ms
     foreigns <- inferForeignModules filePathMap
 
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev)
+    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE
 
-    isE <- liftIO $ isEmptyMVar mvar
-    when isE $ liftIO $ putMVar mvar (a, b, c, d)
+    liftIO $ putMVar mvar (a, b, c, d)
 
     let pmakeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
-    (a', b', c', d', _) <- P.make pmakeActions e (Just (a, b, c, d))
+    (a', b', c', d', _) <- P.make pmakeActions e (Just (a, b, c, d)) prE
 
     return $ (a', b', c', d')
   val <-
-    printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmJSONErrors makeWarnings makeErrors
+    printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors
   case val of
     Just x -> do
       _ <- takeMVar mvar
       putMVar mvar x
+      writeIORef errorRef False
     Nothing -> do
       isE <- isEmptyMVar mvar
-      print "inside error path"
-      print isE
       when isE $ putMVar mvar prev
+      writeIORef errorRef True
   putStrLn "recompiling completed ..."
 
 compileF ::
@@ -144,10 +147,10 @@ compileF PSCMakeOptions {..} input fpRef = do
     foreigns <- inferForeignModules filePathMap
     liftIO $ writeIORef fpRef (filePathMap, foreigns)
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing
+    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False
     return $ (a, b, c, d)
   bo <-
-    printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmJSONErrors makeWarnings makeErrors
+    printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors
   when (isNothing bo) $ exitFailure
   return $ fromJust bo
 

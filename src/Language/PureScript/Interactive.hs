@@ -80,7 +80,7 @@ make
 make ms = do
     foreignFiles <- P.inferForeignModules filePathMap
     (externs, _, _, _, _) <-
-      P.make (buildActions foreignFiles) (map snd ms) Nothing
+      P.make (buildActions foreignFiles) (map snd ms) Nothing False
     return (externs, foldl' (flip P.applyExternsFileToEnvironment) P.initEnvironment externs)
   where
     buildActions :: M.Map P.ModuleName FilePath -> P.MakeActions P.Make
