@@ -76,6 +76,7 @@ compile psc@PSCMakeOptions{..} = do
     exitFailure
   fpRef <- newIORef (M.empty, M.empty)
   (externs, sorted, graph, prebuilt) <- compileF psc input fpRef
+  putStrLn "Compiling completed...."
   if pscmWatch
      then do
         emptyVar <- newEmptyMVar
@@ -122,7 +123,7 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
     foreigns <- inferForeignModules filePathMap
 
     let makeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
-    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE
+    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE pscmWatch
 
     liftIO $ putMVar mvar (a, b, c, d)
 
@@ -132,7 +133,7 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
 
     let nextModules m = flip union m . map snd $ oldMs
 
-    (a', b', c', d', _) <- P.make makeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE
+    (a', b', c', d', _) <- P.make makeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE pscmWatch
 
     return $ (a', b', c', d')
 
@@ -162,12 +163,17 @@ compileF PSCMakeOptions {..} input fpRef = do
   moduleFiles <- readInput input
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
+
     let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, Right fp)) ms
     foreigns <- inferForeignModules filePathMap
-    liftIO $ writeIORef fpRef (filePathMap, foreigns)
+
+    when pscmWatch $ liftIO $ writeIORef fpRef (filePathMap, foreigns)
+
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False
+    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False pscmWatch
+
     return $ (a, b, c, d)
+
   (_, bo) <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors
   when (isNothing bo) $ exitFailure

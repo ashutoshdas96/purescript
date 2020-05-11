@@ -225,6 +225,7 @@ data Module = Module SourceSpan [Comment] ModuleName [Declaration] (Maybe [Decla
   deriving (Show)
 
 instance Eq Module where
+  (Module _ _ c _ _) == (Module _ _ c' _ _) = c == c'
 
 -- | Return a module's name.
 getModuleName :: Module -> ModuleName

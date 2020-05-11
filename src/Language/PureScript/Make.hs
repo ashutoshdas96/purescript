@@ -14,7 +14,7 @@ import           Prelude.Compat
 
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
-import           Control.Monad.Base ()
+import           Control.Monad.Base (liftBase)
 import           Control.Monad.Error.Class (MonadError (..))
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply
@@ -52,12 +52,12 @@ import           System.FilePath (replaceExtension, FilePath)
 -- This function is used for fast-rebuild workflows (PSCi and psc-ide are examples).
 rebuildModule
   :: forall m
-  . (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
+   . (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
   => MakeActions m
   -> [ExternsFile]
   -> Module
   -> m ExternsFile
-rebuildModule MakeActions {..} externs m@(Module _ _ moduleName _ _) = do
+rebuildModule MakeActions{..} externs m@(Module _ _ moduleName _ _) = do
   progress $ CompilingModule moduleName
   let env = foldl' (flip applyExternsFileToEnvironment) initEnvironment externs
       withPrim = importPrim m
@@ -65,16 +65,20 @@ rebuildModule MakeActions {..} externs m@(Module _ _ moduleName _ _) = do
   ((Module ss coms _ elaborated exps, env'), nextVar) <- runSupplyT 0 $ do
     [desugared] <- desugar externs [withPrim]
     runCheck' (emptyCheckState env) $ typeCheckModule desugared
+
   -- desugar case declarations *after* type- and exhaustiveness checking
   -- since pattern guards introduces cases which the exhaustiveness checker
   -- reports as not-exhaustive.
   (deguarded, nextVar') <- runSupplyT nextVar $ do
     desugarCaseGuards elaborated
+
   regrouped <- createBindingGroups moduleName . collapseBindingGroups $ deguarded
   let mod' = Module ss coms moduleName regrouped exps
       corefn = CF.moduleToCoreFn env' mod'
+      --optimized = CF.optimizeCoreFn corefn
       [renamed] = renameInModules [corefn]
       exts = moduleToExternsFile mod' env'
+  --ffiCodegen renamed
   evalSupplyT nextVar' . codegen renamed env' . encode $ exts
   return exts
 
@@ -89,15 +93,16 @@ make
   -> [Module]
   -> Maybe ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
   -> Bool -- ^ Previously error occurred in watch
+  -> Bool -- ^ Watch Mode
   -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt, [Module])
-make ma@MakeActions {..} ms previous preError = do
+make ma@MakeActions {..} ms previous preError watch = do
   checkModuleNamesAreUnique
 
   (sorted, graph) <-
     if isJust previous
       then
         let Just (_, pm, _, _) = previous
-         in ms
+         in sortModules $ union ms pm
       else sortModules ms
 
   let s =
@@ -116,7 +121,6 @@ make ma@MakeActions {..} ms previous preError = do
   for_ toBeRebuilt $ \m -> fork $ do
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
     buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName sorted)
-
 
   -- Wait for all threads to complete, and collect errors.
   errors <- BuildPlan.collectErrors buildPlan
@@ -155,7 +159,7 @@ make ma@MakeActions {..} ms previous preError = do
 
   -- Compute the new prebuilt that will be used for next run in case of
   -- watch.
-  prebuilt <- if isJust previous
+  prebuilt <- if watch
                  then M.traverseWithKey prebuiltPrevious results
                  else return M.empty
 
