@@ -111,7 +111,7 @@ make ma@MakeActions{..} ms previous preError = do
         else  BuildPlan.construct ma (s, graph)
 
   let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName) s
-  for_ toBeRebuilt $ \m -> do
+  for_ toBeRebuilt $ \m -> fork $ do
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
     buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName sorted)
 
