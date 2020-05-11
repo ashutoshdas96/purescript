@@ -98,7 +98,7 @@ getResult
   => BuildPlan
   -> ModuleName
   -> m (Maybe (MultipleErrors, ExternsFile))
-getResult buildPlan moduleName =
+getResult buildPlan moduleName = do
   case M.lookup moduleName (bpPrebuilt buildPlan) of
     Just es ->
       pure (Just (MultipleErrors [], pbExternsFile es))

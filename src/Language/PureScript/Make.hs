@@ -13,6 +13,7 @@ import           Prelude.Compat
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
 import           Control.Monad.Error.Class (MonadError(..))
+import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -95,7 +96,7 @@ make ma@MakeActions{..} ms previous preError = do
   (sorted, graph) <-
     if isJust previous
       then let Just (_, pm, pg, _) = previous
-          in return (pm, pg)
+          in sortModules $ union ms pm
       else sortModules ms
 
   let s = if isJust previous
@@ -110,9 +111,9 @@ make ma@MakeActions{..} ms previous preError = do
         else  BuildPlan.construct ma (s, graph)
 
   let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName) s
-  for_ toBeRebuilt $ \m -> fork $ do
+  for_ toBeRebuilt $ \m -> do
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
-    buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName (union s sorted))
+    buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName sorted)
 
   -- Wait for all threads to complete, and collect errors.
   errors <- BuildPlan.collectErrors buildPlan
@@ -134,7 +135,10 @@ make ma@MakeActions{..} ms previous preError = do
                 currentExternFile = M.lookup mn results
                 prevDecl = efDeclarations <$> prevExternFile
                 currDecl = efDeclarations <$> currentExternFile
-            if not preError && prevDecl == currDecl
+            -- Don't compile the dependencies when previously error didn't occurred,
+            -- or nothing changed and even if new declaration added
+            if not preError && (prevDecl == currDecl)
+               -- || length currDecl > length prevDecl)
               then []
               else do
                 let graphN = filter (\(_, g) -> elem mn g) graph

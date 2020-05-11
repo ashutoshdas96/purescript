@@ -74,12 +74,12 @@ compile psc@PSCMakeOptions{..} = do
     exitFailure
   fpRef <- newIORef (M.empty, M.empty)
   (externs, sorted, graph, prebuilt) <- compileF psc input fpRef
-  emptyVar <- newEmptyMVar
-  putMVar emptyVar (externs, sorted, graph, prebuilt)
-
-  errorRef <- newIORef ([], False)
   if pscmWatch
      then do
+        emptyVar <- newEmptyMVar
+        putMVar emptyVar (externs, sorted, graph, prebuilt)
+
+        errorRef <- newIORef ([], False)
         withManager $ \mgr -> do
           watchTree
             mgr
@@ -119,17 +119,18 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
     let filePathMap = M.fromList $ map (\(mfp, P.Module _ _ mn _ _) -> (mn, Right mfp)) ms
     foreigns <- inferForeignModules filePathMap
 
-    let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
+    let makeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
     (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE
 
     liftIO $ putMVar mvar (a, b, c, d)
 
-    oldMs <- P.parseModulesFromFiles id errCaseModules
+    oldMs <- if null errCaseModules
+                then return []
+                else P.parseModulesFromFiles id errCaseModules
 
     let nextModules m = flip union m . map snd $ oldMs
 
-    let pmakeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
-    (a', b', c', d', _) <- P.make pmakeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE
+    (a', b', c', d', _) <- P.make makeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE
 
     return $ (a', b', c', d')
 
