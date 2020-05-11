@@ -19,4 +19,6 @@ data Module a = Module
   , moduleDecls :: [Bind a]
   } deriving (Show)
 
+instance Eq a => Eq (Module a)
+
 type ForeignDecl = (Ident, Type)

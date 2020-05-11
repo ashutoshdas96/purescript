@@ -224,6 +224,8 @@ data ErrorMessage = ErrorMessage
 data Module = Module SourceSpan [Comment] ModuleName [Declaration] (Maybe [DeclarationRef])
   deriving (Show)
 
+instance Eq Module where
+
 -- | Return a module's name.
 getModuleName :: Module -> ModuleName
 getModuleName (Module _ _ name _ _) = name
@@ -460,7 +462,7 @@ getValueDeclaration (ValueDeclaration d) = Just d
 getValueDeclaration _ = Nothing
 
 pattern ValueDecl :: SourceAnn -> Ident -> NameKind -> [Binder] -> [GuardedExpr] -> Declaration
-pattern ValueDecl sann ident name binders expr 
+pattern ValueDecl sann ident name binders expr
   = ValueDeclaration (ValueDeclarationData sann ident name binders expr)
 
 -- |

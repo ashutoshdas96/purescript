@@ -139,7 +139,7 @@ data ExternsDeclaration =
   | EDKind
       { edKindName                :: ProperName 'KindName
       }
-  deriving Show
+  deriving (Show, Eq)
 
 -- | Convert an externs file back into a module
 applyExternsFileToEnvironment :: ExternsFile -> Environment -> Environment
