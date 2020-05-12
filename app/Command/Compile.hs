@@ -14,7 +14,7 @@ import qualified Data.Aeson as A
 import           Data.Bool (bool)
 import qualified Data.ByteString.Lazy.UTF8 as LBU8
 import           Data.IORef
-import           Data.List (intercalate, union)
+import           Data.List (intercalate, union, isSuffixOf)
 import qualified Data.Map as M
 import           Data.Maybe (fromJust, isNothing, catMaybes)
 import qualified Data.Set as S
@@ -84,7 +84,7 @@ compile psc@PSCMakeOptions{..} = do
           watchTree
             mgr
             "./src"
-            (const True)
+            (isSuffixOf ".purs" . eventPath)
             (recompile psc emptyVar fpRef errorRef)
           forever $ threadDelay 1000000
      else exitSuccess
@@ -120,7 +120,7 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
     foreigns <- inferForeignModules filePathMap
 
     let makeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
-    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE
+    (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE pscmWatch
 
     liftIO $ putMVar mvar (a, b, c, d)
 
@@ -130,7 +130,7 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
 
     let nextModules m = flip union m . map snd $ oldMs
 
-    (a', b', c', d', _) <- P.make makeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE
+    (a', b', c', d', _) <- P.make makeActions (nextModules e) (Just (a, (nextModules b), c, d)) prE pscmWatch
 
     return $ (a', b', c', d')
 
@@ -164,7 +164,7 @@ compileF PSCMakeOptions {..} input fpRef = do
     foreigns <- inferForeignModules filePathMap
     liftIO $ writeIORef fpRef (filePathMap, foreigns)
     let makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False
+    (a, b, c, d, _) <- P.make makeActions (map snd ms) Nothing False pscmWatch
     return $ (a, b, c, d)
   (_, bo) <-
     printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmWarnings pscmJSONErrors makeWarnings makeErrors

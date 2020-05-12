@@ -89,28 +89,28 @@ make :: forall m. (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, 
      -> [Module]
      -> Maybe ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt)
      -> Bool -- ^ Previously error occurred in watch
+     -> Bool -- ^ Watch
      -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt, [Module])
-make ma@MakeActions{..} ms previous preError = do
-  checkModuleNames
+make ma@MakeActions{..} ms previous preError watch = do
+  -- Not check for uniqueness on rebuilding (watch mode)
+  unless (isJust previous) $ checkModuleNames
 
   (sorted, graph) <-
     if isJust previous
-      then let Just (_, pm, pg, _) = previous
+      then let Just (_, pm, _, _) = previous
           in sortModules $ union ms pm
       else sortModules ms
-
-  let s = if isJust previous
-             then ms
-             else sorted
 
   buildPlan <-
     if isJust previous
         then do
           let Just (_, _, _, pb) = previous
           BuildPlan.constructSingle ms pb
-        else  BuildPlan.construct ma (s, graph)
+        else  BuildPlan.construct ma (sorted, graph)
 
-  let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName) s
+  let toBeRebuilt = if isJust previous
+                       then ms
+                       else filter (BuildPlan.needsRebuild buildPlan . getModuleName) sorted
   for_ toBeRebuilt $ \m -> fork $ do
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
     buildModule buildPlan (importPrim m) (deps `inOrderOf` map getModuleName sorted)
@@ -127,7 +127,7 @@ make ma@MakeActions{..} ms previous preError = do
   -- Check If dependencies of module changed to be rebuild explicitly in watch mode
   -- based on the current and previous externsFile
   let allResults =
-        if (isJust previous)
+        if isJust previous && not preError
           then do
             let Just (_, oldM, _, pb) = previous
                 mn = getModuleName $ head ms
@@ -137,7 +137,7 @@ make ma@MakeActions{..} ms previous preError = do
                 currDecl = efDeclarations <$> currentExternFile
             -- Don't compile the dependencies when previously error didn't occurred,
             -- or nothing changed and even if new declaration added
-            if not preError && (prevDecl == currDecl)
+            if prevDecl == currDecl
                -- || length currDecl > length prevDecl)
               then []
               else do
@@ -151,9 +151,10 @@ make ma@MakeActions{..} ms previous preError = do
   -- and in PSCI.
   let lookupResult mn = fromMaybe (internalError "make: module not found in results") (M.lookup mn results)
 
-  -- Compute the new prebuilt that will be used for next run in case of
-  -- watch.
-  prebuilt <- M.traverseWithKey prebuiltPrevious results
+  -- Compute the new prebuilt that will be used for next run in case of watch.
+  prebuilt <- if watch
+                 then M.traverseWithKey prebuiltPrevious results
+                 else return M.empty
 
   return (map (lookupResult . getModuleName) sorted, sorted, graph, prebuilt, allResults )
 

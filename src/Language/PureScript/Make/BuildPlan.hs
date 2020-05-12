@@ -111,7 +111,6 @@ constructSingle
   -> M.Map ModuleName Prebuilt
   -> m BuildPlan
 constructSingle ms pb = do
-  buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
   let bp = foldl (\ac cm -> M.delete (getModuleName cm) ac) pb ms
   buildJobs <- foldM makeBuildJob M.empty (map getModuleName ms)
   pure $ BuildPlan bp buildJobs
