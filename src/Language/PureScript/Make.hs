@@ -96,7 +96,7 @@ make
   -> Bool -- ^ Watch Mode
   -> m ([ExternsFile], [Module], ModuleGraph, M.Map ModuleName Prebuilt, [Module])
 make ma@MakeActions {..} ms previous preError watch = do
-  checkModuleNamesAreUnique
+  unless (isJust previous) checkModuleNamesAreUnique
 
   (sorted, graph) <-
     if isJust previous

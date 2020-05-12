@@ -14,7 +14,7 @@ import qualified Data.Aeson as A
 import           Data.Bool (bool)
 import qualified Data.ByteString.Lazy.UTF8 as LBU8
 import           Data.IORef
-import           Data.List (intercalate, union)
+import           Data.List (intercalate, union, isSuffixOf)
 import qualified Data.Map as M
 import           Data.Maybe (fromJust, isNothing, catMaybes)
 import           Data.Monoid ((<>))
@@ -87,7 +87,7 @@ compile psc@PSCMakeOptions{..} = do
           watchTree
             mgr
             "./src"
-            (const True)
+            (isSuffixOf ".purs" . eventPath)
             (recompile psc emptyVar fpRef errorRef)
           forever $ threadDelay 1000000
      else exitSuccess
