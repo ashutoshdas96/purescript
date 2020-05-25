@@ -14,7 +14,7 @@ import qualified Data.Aeson as A
 import           Data.Bool (bool)
 import qualified Data.ByteString.Lazy.UTF8 as LBU8
 import           Data.IORef
-import           Data.List (intercalate, union, isSuffixOf)
+import           Data.List (intercalate, union)
 import qualified Data.Map as M
 import           Data.Maybe (fromJust, isNothing, catMaybes)
 import qualified Data.Set as S
@@ -61,7 +61,7 @@ printWarningsAndErrors verbose _ True warnings errors = do
   hPutStrLn stderr . LBU8.toString . A.encode $
     JSONResult (toJSONErrors verbose P.Warning warnings)
                (either (toJSONErrors verbose P.Error) (const []) errors)
-  return $ ([], Nothing)
+  _ <- return $ ([], Nothing)
   return $ either ((,Nothing) . catMaybes . map P.errorModule . P.runMultipleErrors) (([],) . Just) errors
 
 onlyModifiedEvents :: Event -> Bool
@@ -87,7 +87,7 @@ compile psc@PSCMakeOptions{..} = do
 
         errorRef <- newIORef ([], False)
         withManager $ \mgr -> do
-          watchTree
+          _ <- watchTree
             mgr
             "./src"
             onlyModifiedEvents

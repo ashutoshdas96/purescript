@@ -31,7 +31,7 @@ import           Language.PureScript.Crash
 import           Language.PureScript.Errors
 import           Language.PureScript.Externs
 import           Language.PureScript.Make.Actions as Actions
-import           Language.PureScript.Names (ModuleName, moduleNameFromString)
+import           Language.PureScript.Names (ModuleName)
 import qualified Paths_purescript as Paths
 
 -- | The BuildPlan tracks information about our build progress, and holds all

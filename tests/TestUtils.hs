@@ -29,7 +29,7 @@ import System.IO.UTF8 (readUTF8FileT)
 import System.Exit (exitFailure)
 import System.FilePath
 import qualified System.FilePath.Glob as Glob
-import System.IO 
+import System.IO
 import Test.Tasty.Hspec
 
 
@@ -111,7 +111,7 @@ setupSupportModules = do
   let modules = map snd ms
   supportExterns <- runExceptT $ do
     foreigns <- inferForeignModules ms
-    externs <- ExceptT . fmap fst . runTest $ P.make (makeActions modules foreigns) modules
+    (externs, _, _, _, _) <- ExceptT . fmap fst . runTest $ P.make (makeActions modules foreigns) modules Nothing False False
     return (externs, foreigns)
   case supportExterns of
     Left errs -> fail (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
@@ -174,7 +174,9 @@ compile supportModules supportExterns supportForeigns inputFiles check = runTest
   let actions = makeActions supportModules (foreigns `M.union` supportForeigns)
   case ms of
     [singleModule] -> pure <$> P.rebuildModule actions supportExterns (snd singleModule)
-    _ -> P.make actions (supportModules ++ map snd ms)
+    _ -> do
+      (externs, _, _, _, _) <- P.make actions (supportModules ++ map snd ms) Nothing False False
+      pure externs
 
 assert
   :: [P.Module]
