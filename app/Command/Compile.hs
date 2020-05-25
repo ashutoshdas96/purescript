@@ -65,6 +65,10 @@ printWarningsAndErrors verbose _ True warnings errors = do
   return $ ([], Nothing)
   return $ either ((,Nothing) . catMaybes . map P.errorModule . P.runMultipleErrors) (([],) . Just) errors
 
+onlyModifiedEvents :: Event -> Bool
+onlyModifiedEvents (Modified _ _) = True
+onlyModifiedEvents _                = False
+
 compile :: PSCMakeOptions -> IO ()
 compile psc@PSCMakeOptions{..} = do
   putStrLn "Compiling project...."
@@ -76,9 +80,9 @@ compile psc@PSCMakeOptions{..} = do
     exitFailure
   fpRef <- newIORef (M.empty, M.empty)
   (externs, sorted, graph, prebuilt) <- compileF psc input fpRef
-  putStrLn "Compiling completed...."
   if pscmWatch
      then do
+        putStrLn "Watching on source tree"
         emptyVar <- newEmptyMVar
         putMVar emptyVar (externs, sorted, graph, prebuilt)
 
@@ -87,7 +91,7 @@ compile psc@PSCMakeOptions{..} = do
           watchTree
             mgr
             "./src"
-            (isSuffixOf ".purs" . eventPath)
+            onlyModifiedEvents
             (recompile psc emptyVar fpRef errorRef)
           forever $ threadDelay 1000000
      else exitSuccess
@@ -103,7 +107,7 @@ recompile
   -> IO ()
 recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
   let fp = eventPath event
-  putStrLn "recompiling ..."
+  putStrLn $ "recompiling started ... " <> fp
 
   moduleFiles <- readInput [fp]
 
@@ -118,9 +122,6 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
 
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
     ms <- P.parseModulesFromFiles id moduleFiles
-
-    let filePathMap = M.fromList $ map (\(mfp, P.Module _ _ mn _ _) -> (mn, Right mfp)) ms
-    foreigns <- inferForeignModules filePathMap
 
     let makeActions = buildMakeActions pscmOutputDir oldFp oldForeign pscmUsePrefix
     (a, b, c, d, e) <- P.make makeActions (map snd ms) (Just prev) prE pscmWatch
@@ -150,7 +151,7 @@ recompile PSCMakeOptions{..} mvar fpRef errorRef event = do
       when isE $ putMVar mvar prev
       writeIORef errorRef (errs, True)
 
-  putStrLn "recompiling completed ..."
+  putStrLn $ "recompiling completed ..." <> fp
 
 compileF ::
     PSCMakeOptions
