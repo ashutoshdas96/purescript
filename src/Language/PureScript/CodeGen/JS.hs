@@ -55,7 +55,8 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     let usedNames = concatMap getNames decls
     let mnLookup = renameImports usedNames imps
     let decls' = renameModules mnLookup decls
-    jsDecls <- mapM bindToJs decls'
+    jsDecls' <- mapM bindToJs decls'
+    let jsDecls =  [customConstructorFunction : concat jsDecls']
     optimized <- traverse (traverse optimize) jsDecls
     let mnReverseLookup = M.fromList $ map (\(origName, (_, safeName)) -> (moduleNameToJs safeName, origName)) $ M.toList mnLookup
     let usedModuleNames = foldMap (foldMap (findModules mnReverseLookup)) optimized
@@ -223,9 +224,14 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     args' <- mapM valueToJs args
     case f of
       Var (_, _, _, Just IsNewtype) _ -> return (head args')
-      Var (_, _, _, Just (IsConstructor _ fields)) name | length args == length fields ->
+      Var (_, _, _, Just (IsConstructor _ fields)) (Qualified _ name) | length args == length fields ->
         return $
-          foldl (\fun arg -> AST.App Nothing fun [arg]) (qualifiedToJS id name) args'
+            AST.App Nothing 
+            (AST.Var Nothing $ identToJs ( (\_ -> Ident $ "createConstructor") name)) 
+            [ (AST.StringLiteral Nothing (mkString $ identToJs name))
+            , (AST.ArrayLiteral Nothing args')]
+        -- return $
+        --   foldl (\fun arg -> AST.App Nothing fun [arg]) (qualifiedToJS id name) args'
       Var (_, _, _, Just IsTypeClassConstructor) name ->
         return $ AST.Unary Nothing AST.New $ AST.App Nothing (qualifiedToJS id name) args'
       _ -> flip (foldl (\fn a -> AST.App Nothing fn [a])) args' <$> valueToJs f
@@ -252,16 +258,16 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
                 AST.ObjectLiteral Nothing [("create",
                   AST.Function Nothing Nothing ["value"]
                     (AST.Block Nothing [AST.Return Nothing $ AST.Var Nothing "value"]))])
-  valueToJs' (Constructor _ _ ctor fields) =
+  valueToJs' (Constructor _ _ ctor _) =
     let
       objRep = AST.ObjectLiteral Nothing $
-        [ (mkString $ "tag", AST.StringLiteral Nothing (mkString $ runProperName ctor)) ] ++
-          ((\f -> (mkString $ identToJs f, var f)) <$> fields)
-      createFn =
-        if null fields
-        then objRep
-        else foldr (\f inner -> AST.Function Nothing Nothing [identToJs f] (AST.Block Nothing [AST.Return Nothing inner])) objRep fields
-    in return createFn
+        [ (mkString $ "tag", AST.StringLiteral Nothing (mkString $ runProperName ctor)) ] 
+      --   ++ ((\f -> (mkString $ identToJs f, var f)) <$> fields)
+      -- createFn =
+      --   if null fields
+      --   then objRep
+        --else foldr (\f inner -> AST.Function Nothing Nothing [identToJs f] (AST.Block Nothing [AST.Return Nothing inner])) objRep fields
+    in return objRep
 
   literalToValueJS :: SourceSpan -> Literal (Expr Ann) -> m AST
   literalToValueJS ss (NumericLiteral (Left i)) = return $ AST.NumericLiteral (Just ss) (Left i)
@@ -444,3 +450,28 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
          then throwError . maybe errorMessage errorMessage' ss $ IntOutOfRange i "JavaScript" minInt maxInt
          else return js
     go other = return other
+
+-- custom function for PURS Value Constuctors 
+-- all assignments after compiling refer to this function 
+customConstructorFunction :: AST 
+customConstructorFunction = 
+  let forLoopBlock = AST.For Nothing 
+                     "i"
+                     (AST.NumericLiteral Nothing (Left 0))
+                     (AST.Indexer Nothing (AST.StringLiteral Nothing "length") (AST.Var Nothing "values")) 
+                     (AST.Block Nothing [ 
+                        AST.Assignment 
+                            Nothing
+                            (AST.Indexer Nothing (AST.Binary Nothing AST.Add (AST.StringLiteral Nothing "value") (AST.Var Nothing "i")) (AST.Var Nothing "result") )
+                            (AST.Indexer Nothing (AST.Var Nothing "i") (AST.Var Nothing "values"))])
+  in AST.Function 
+               Nothing
+               (Just ("createConstructor"))
+               ["tag","values"]
+               (AST.Block
+                   Nothing
+                   [  (AST.Assignment Nothing (AST.Var Nothing "result") (AST.Block Nothing []))
+                    , (AST.Assignment Nothing (AST.Indexer Nothing (AST.StringLiteral Nothing "tag") (AST.Var Nothing "result")) (AST.Var Nothing "tag"))
+                    , forLoopBlock
+                    , (AST.Return Nothing (AST.Var Nothing "result"))
+                   ])   
