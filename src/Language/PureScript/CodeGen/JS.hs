@@ -41,7 +41,6 @@ import Language.PureScript.Traversals (sndM)
 import qualified Language.PureScript.Constants as C
 
 import System.FilePath.Posix ((</>))
-
 -- | Generate code in the simplified JavaScript intermediate representation for all declarations in a
 -- module.
 moduleToJs
@@ -55,9 +54,9 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     let usedNames = concatMap getNames decls
     let mnLookup = renameImports usedNames imps
     let decls' = renameModules mnLookup decls
-    jsDecls' <- mapM bindToJs decls'
-    let jsDecls =  [customConstructorFunction : concat jsDecls']
-    optimized <- traverse (traverse optimize) jsDecls
+    jsDecls <- mapM bindToJs decls'
+    optimized' <- traverse (traverse optimize) jsDecls
+    let optimized = [createTagFn : concat optimized']
     let mnReverseLookup = M.fromList $ map (\(origName, (_, safeName)) -> (moduleNameToJs safeName, origName)) $ M.toList mnLookup
     let usedModuleNames = foldMap (foldMap (findModules mnReverseLookup)) optimized
     jsImports <- traverse (importToJs mnLookup)
@@ -227,7 +226,7 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
       Var (_, _, _, Just (IsConstructor _ fields)) (Qualified _ name) | length args == length fields ->
         return $
             AST.App Nothing 
-            (AST.Var Nothing $ identToJs ( (\_ -> Ident $ "createConstructor") name)) 
+            (AST.Var Nothing "_$tag$_") 
             [ (AST.StringLiteral Nothing (mkString $ identToJs name))
             , (AST.ArrayLiteral Nothing args')]
         -- return $
@@ -453,18 +452,18 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
 
 -- custom function for PURS Value Constuctors 
 -- all assignments after compiling refer to this function 
-customConstructorFunction :: AST
-customConstructorFunction = 
+createTagFn :: AST
+createTagFn = 
     let definition = AST.Function
                           Nothing
                           Nothing
-                          ["i"]
+                          []
                           (AST.Block Nothing [(AST.Return Nothing $ createConsFn)])
-    in AST.VariableIntroduction Nothing "createConstructor" (Just $ fnCall definition)
+    in AST.VariableIntroduction Nothing "_$tag$_" (Just $ fnCall definition)
     where
       createConsFn :: AST 
       createConsFn = 
-        let forLoopBlock = AST.SafeFor Nothing 
+        let forLoopBlock = AST.For Nothing 
                           "i"
                           (AST.NumericLiteral Nothing (Left 0))
                           (AST.Indexer Nothing (AST.StringLiteral Nothing "length") (AST.Var Nothing "values")) 
@@ -486,4 +485,4 @@ customConstructorFunction =
                         ])   
 
       fnCall :: AST -> AST
-      fnCall def = AST.App Nothing def [AST.NumericLiteral Nothing (Left 0)]   
+      fnCall def = AST.App Nothing def []
