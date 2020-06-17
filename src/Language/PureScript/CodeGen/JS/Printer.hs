@@ -97,6 +97,14 @@ literals = mkPattern' match'
     , return $ emit $ "; " <> ident <> "++) "
     , prettyPrintJS' sts
     ]
+  match (SafeFor _ ident start end sts) = mconcat <$> sequence
+    [ return $ emit $ "for (" <> ident <> " = "
+    , prettyPrintJS' start
+    , return $ emit $ "; " <> ident <> " < "
+    , prettyPrintJS' end
+    , return $ emit $ "; " <> ident <> "++) "
+    , prettyPrintJS' sts
+    ]
   match (ForIn _ ident obj sts) = mconcat <$> sequence
     [ return $ emit $ "for (var " <> ident <> " in "
     , prettyPrintJS' obj

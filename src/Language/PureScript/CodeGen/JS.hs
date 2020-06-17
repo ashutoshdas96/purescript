@@ -453,25 +453,37 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
 
 -- custom function for PURS Value Constuctors 
 -- all assignments after compiling refer to this function 
-customConstructorFunction :: AST 
+customConstructorFunction :: AST
 customConstructorFunction = 
-  let forLoopBlock = AST.For Nothing 
-                     "i"
-                     (AST.NumericLiteral Nothing (Left 0))
-                     (AST.Indexer Nothing (AST.StringLiteral Nothing "length") (AST.Var Nothing "values")) 
-                     (AST.Block Nothing [ 
-                        AST.Assignment 
-                            Nothing
-                            (AST.Indexer Nothing (AST.Binary Nothing AST.Add (AST.StringLiteral Nothing "value") (AST.Var Nothing "i")) (AST.Var Nothing "result") )
-                            (AST.Indexer Nothing (AST.Var Nothing "i") (AST.Var Nothing "values"))])
-  in AST.Function 
-               Nothing
-               (Just ("createConstructor"))
-               ["tag","values"]
-               (AST.Block
-                   Nothing
-                   [  (AST.Assignment Nothing (AST.Var Nothing "result") (AST.Block Nothing []))
-                    , (AST.Assignment Nothing (AST.Indexer Nothing (AST.StringLiteral Nothing "tag") (AST.Var Nothing "result")) (AST.Var Nothing "tag"))
-                    , forLoopBlock
-                    , (AST.Return Nothing (AST.Var Nothing "result"))
-                   ])   
+    let definition = AST.Function
+                          Nothing
+                          Nothing
+                          ["i"]
+                          (AST.Block Nothing [(AST.Return Nothing $ createConsFn)])
+    in AST.VariableIntroduction Nothing "createConstructor" (Just $ fnCall definition)
+    where
+      createConsFn :: AST 
+      createConsFn = 
+        let forLoopBlock = AST.SafeFor Nothing 
+                          "i"
+                          (AST.NumericLiteral Nothing (Left 0))
+                          (AST.Indexer Nothing (AST.StringLiteral Nothing "length") (AST.Var Nothing "values")) 
+                          (AST.Block Nothing [ 
+                              AST.Assignment 
+                                  Nothing
+                                  (AST.Indexer Nothing (AST.Binary Nothing AST.Add (AST.StringLiteral Nothing "value") (AST.Var Nothing "i")) (AST.Var Nothing "result") )
+                                  (AST.Indexer Nothing (AST.Var Nothing "i") (AST.Var Nothing "values"))])
+        in AST.Function 
+                    Nothing
+                    Nothing
+                    ["tag","values"]
+                    (AST.Block
+                        Nothing
+                        [  (AST.Assignment Nothing (AST.Var Nothing "result") (AST.Block Nothing []))
+                          , (AST.Assignment Nothing (AST.Indexer Nothing (AST.StringLiteral Nothing "tag") (AST.Var Nothing "result")) (AST.Var Nothing "tag"))
+                          , forLoopBlock
+                          , (AST.Return Nothing (AST.Var Nothing "result"))
+                        ])   
+
+      fnCall :: AST -> AST
+      fnCall def = AST.App Nothing def [AST.NumericLiteral Nothing (Left 0)]   
