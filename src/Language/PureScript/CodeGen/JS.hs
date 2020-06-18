@@ -478,7 +478,7 @@ createTagFn =
                     ["tag","values"]
                     (AST.Block
                         Nothing
-                        [  (AST.Assignment Nothing (AST.Var Nothing "result") (AST.Block Nothing []))
+                        [  (AST.VariableIntroduction Nothing "result" (Just $ AST.Block Nothing []))
                           , (AST.Assignment Nothing (AST.Indexer Nothing (AST.StringLiteral Nothing "tag") (AST.Var Nothing "result")) (AST.Var Nothing "tag"))
                           , forLoopBlock
                           , (AST.Return Nothing (AST.Var Nothing "result"))
