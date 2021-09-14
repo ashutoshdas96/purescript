@@ -804,7 +804,7 @@ parse = either (([],) . Left) resFull . parseModule . lex
 data PartialResult a = PartialResult
   { resPartial :: a
   , resFull :: ([ParserWarning], Either (NE.NonEmpty ParserError) a)
-  } deriving (Functor)
+  } deriving (Functor, Eq)
 
 parseModule :: [LexResult] -> Either (NE.NonEmpty ParserError) (PartialResult (Module ()))
 parseModule toks = fmap (\header -> PartialResult header (parseFull header)) headerRes

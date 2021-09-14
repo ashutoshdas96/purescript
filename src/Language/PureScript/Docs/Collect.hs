@@ -98,7 +98,8 @@ compileForDocs outputDir inputFiles = do
             (P.buildMakeActions outputDir filePathMap foreigns False)
               { P.progress = liftIO . putStrLn . renderProgressMessage
               }
-      P.make makeActions (map snd ms)
+      (r, _, _, _, _) <- P.make makeActions (map snd ms) Nothing False False
+      return r
   either throwError return result
 
   where

@@ -150,7 +150,7 @@ setupSupportModules = do
   let modules = map snd ms
   supportExterns <- runExceptT $ do
     foreigns <- inferForeignModules ms
-    externs <- ExceptT . fmap fst . runTest $ P.make (makeActions modules foreigns) (CST.pureResult <$> modules)
+    (externs, _, _, _, _) <- ExceptT . fmap fst . runTest $ P.make (makeActions modules foreigns) (CST.pureResult <$> modules) Nothing False False
     return (externs, foreigns)
   case supportExterns of
     Left errs -> fail (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
@@ -212,7 +212,9 @@ compile SupportModules{..} inputFiles = runTest $ do
   let actions = makeActions supportModules (foreigns `M.union` supportForeigns)
   case ms of
     [singleModule] -> pure <$> P.rebuildModule actions supportExterns (snd singleModule)
-    _ -> P.make actions (CST.pureResult <$> supportModules ++ map snd ms)
+    _ -> do
+      (externs, _, _, _, _) <- P.make actions (CST.pureResult <$> supportModules ++ map snd ms) Nothing False False
+      pure externs
 
 makeActions :: [P.Module] -> M.Map P.ModuleName FilePath -> P.MakeActions P.Make
 makeActions modules foreigns = (P.buildMakeActions modulesDir (P.internalError "makeActions: input file map was read.") foreigns False)

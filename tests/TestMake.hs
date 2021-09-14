@@ -238,7 +238,8 @@ compileWithOptions opts input = do
             { P.progress = \(P.CompilingModule mn) ->
                 liftIO $ modifyMVar_ recompiled (return . Set.insert mn)
             }
-    P.make makeActions (map snd ms)
+    (r, _, _, _, _) <- P.make makeActions (map snd ms) Nothing False False
+    return r
 
   recompiledModules <- readMVar recompiled
   pure (makeResult, recompiledModules)

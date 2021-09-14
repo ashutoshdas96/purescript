@@ -107,6 +107,9 @@ data HintCategory
 data Module = Module SourceSpan [Comment] ModuleName [Declaration] (Maybe [DeclarationRef])
   deriving (Show)
 
+instance Eq Module where
+  m1 == m2 = (getModuleName m1) == (getModuleName m2)
+
 -- | Return a module's name.
 getModuleName :: Module -> ModuleName
 getModuleName (Module _ _ name _ _) = name
@@ -148,7 +151,7 @@ importPrim =
       . addDefaultImport (Qualified Nothing primModName)
 
 data NameSource = UserNamed | CompilerNamed
-  deriving (Show, Generic, NFData, Serialise)
+  deriving (Show, Generic, NFData, Serialise, Eq)
 
 -- |
 -- An item in a list of explicit imports or exports

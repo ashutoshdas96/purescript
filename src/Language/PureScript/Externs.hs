@@ -109,6 +109,7 @@ instance Serialise ExternsTypeFixity
 -- | A type or value declaration appearing in an externs file
 data ExternsDeclaration =
   -- | A type declaration
+  -- | data X = Y | Z
     EDType
       { edTypeName                :: ProperName 'TypeName
       , edTypeKind                :: SourceType
@@ -155,9 +156,16 @@ data ExternsDeclaration =
       , edInstanceNameSource      :: NameSource
       , edInstanceSourceSpan      :: SourceSpan
       }
-  deriving (Show, Generic)
+  deriving (Show, Generic, Eq)
 
 instance Serialise ExternsDeclaration
+-- =======
+  -- -- | A kind declaration
+  -- | EDKind
+  --     { edKindName                :: ProperName 'KindName
+  --     }
+  -- deriving (Show, Eq)
+-- >>>>>>> ag/stable
 
 -- | Check whether the version in an externs file matches the currently running
 -- version.

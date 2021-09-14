@@ -1,11 +1,16 @@
 module Language.PureScript.Make.BuildPlan
-  ( BuildPlan(bpEnv)
+  ( BuildPlan(..)
+  , Prebuilt(..)
   , BuildJobResult(..)
   , buildJobSuccess
   , buildJobFailure
+  , addBuildPlan
+  , build
   , construct
+  , constructSingle
   , getResult
   , collectResults
+  , empty
   , markComplete
   , needsRebuild
   ) where
@@ -14,14 +19,15 @@ import           Prelude
 
 import           Control.Concurrent.Async.Lifted as A
 import           Control.Concurrent.Lifted as C
-import           Control.Monad.Base (liftBase)
+import           Control.Monad.Base ()
 import           Control.Monad hiding (sequence)
+import           Control.Monad.Base
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
 import           Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 import           Data.Foldable (foldl')
 import qualified Data.Map as M
 import           Data.Maybe (fromMaybe, mapMaybe)
-import           Data.Time.Clock (UTCTime)
+import           Data.Time.Clock
 import           Language.PureScript.AST
 import           Language.PureScript.Crash
 import qualified Language.PureScript.CST as CST
@@ -44,7 +50,7 @@ data BuildPlan = BuildPlan
 data Prebuilt = Prebuilt
   { pbModificationTime :: UTCTime
   , pbExternsFile :: ExternsFile
-  }
+  } deriving Show
 
 newtype BuildJob = BuildJob
   { bjResult :: C.MVar BuildJobResult
@@ -118,13 +124,80 @@ getResult
   => BuildPlan
   -> ModuleName
   -> m (Maybe (MultipleErrors, ExternsFile))
-getResult buildPlan moduleName =
+getResult buildPlan moduleName = do
   case M.lookup moduleName (bpPrebuilt buildPlan) of
     Just es ->
       pure (Just (MultipleErrors [], pbExternsFile es))
     Nothing -> do
       r <- readMVar $ bjResult $ fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
       pure $ buildJobSuccess r
+
+constructSingle
+  :: forall m. (Monad m, MonadBaseControl IO m)
+  => MakeActions m
+  -> CacheDb
+  -> [CST.PartialResult Module]
+  -> M.Map ModuleName Prebuilt
+  -> m (BuildPlan, CacheDb)
+constructSingle MakeActions{..} cacheDb ms pb = do
+  let bp = foldl (\ac cm -> M.delete (getModuleName . CST.resPartial $ cm) ac) pb ms
+  let sortedModuleNames = map (getModuleName . CST.resPartial) ms
+  rebuildStatuses <- A.forConcurrently sortedModuleNames getRebuildStatus
+  let toBeRebuilt = filter (not . flip M.member bp) sortedModuleNames
+  buildJobs <- foldM makeBuildJob M.empty toBeRebuilt
+  env <- C.newMVar primEnv
+  pure
+    ( BuildPlan bp buildJobs env
+    , let
+        update = flip $ \s ->
+          M.alter (const (statusNewCacheInfo s)) (statusModuleName s)
+      in
+        foldl' update cacheDb rebuildStatuses
+    )
+  where
+    makeBuildJob prev moduleName = do
+      buildJob <- BuildJob <$> C.newEmptyMVar
+      pure (M.insert moduleName buildJob prev)
+
+    getRebuildStatus :: ModuleName -> m RebuildStatus
+    getRebuildStatus moduleName = do
+      inputInfo <- getInputTimestampsAndHashes moduleName
+      case inputInfo of
+        Left RebuildNever -> do
+          prebuilt <- findExistingExtern moduleName
+          pure (RebuildStatus
+            { statusModuleName = moduleName
+            , statusRebuildNever = True
+            , statusPrebuilt = prebuilt
+            , statusNewCacheInfo = Nothing
+            })
+        Left RebuildAlways -> do
+          pure (RebuildStatus
+            { statusModuleName = moduleName
+            , statusRebuildNever = False
+            , statusPrebuilt = Nothing
+            , statusNewCacheInfo = Nothing
+            })
+        Right cacheInfo -> do
+          cwd <- liftBase getCurrentDirectory
+          (newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
+          prebuilt <-
+            if isUpToDate
+              then findExistingExtern moduleName
+              else pure Nothing
+          pure (RebuildStatus
+            { statusModuleName = moduleName
+            , statusRebuildNever = False
+            , statusPrebuilt = prebuilt
+            , statusNewCacheInfo = Just newCacheInfo
+            })
+
+    findExistingExtern :: ModuleName -> m (Maybe Prebuilt)
+    findExistingExtern moduleName = runMaybeT $ do
+      timestamp <- MaybeT $ getOutputTimestamp moduleName
+      externs <- MaybeT $ snd <$> readExterns moduleName
+      pure (Prebuilt timestamp externs)
+
 
 -- | Constructs a BuildPlan for the given module graph.
 --
@@ -217,3 +290,24 @@ construct MakeActions{..} cacheDb (sorted, graph) = do
 maximumMaybe :: Ord a => [a] -> Maybe a
 maximumMaybe [] = Nothing
 maximumMaybe xs = Just $ maximum xs
+
+addBuildPlan :: BuildPlan -> BuildPlan -> BuildPlan
+addBuildPlan b1 b2 =
+  BuildPlan (M.union (bpPrebuilt b1) (bpPrebuilt b2)) (M.union (bpBuildJobs b1) (bpBuildJobs b2)) (bpEnv b2)
+
+empty :: forall m. (Monad m, MonadBaseControl IO m) => m BuildPlan
+empty = do
+  e <- C.newEmptyMVar
+  return $ BuildPlan M.empty M.empty e
+
+build :: forall m. (Monad m, MonadBaseControl IO m)
+      => ModuleName
+      -> ExternsFile
+      -> m BuildPlan
+build m e = do
+  timestamp <- liftBase getCurrentTime
+  buildJob <- BuildJob <$> C.newEmptyMVar
+  let pb = M.singleton m $ Prebuilt timestamp e
+      pbj = M.singleton m buildJob
+  env <- C.newMVar primEnv
+  return $ BuildPlan pb pbj env

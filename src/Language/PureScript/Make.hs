@@ -14,6 +14,7 @@ import           Prelude.Compat
 import           Control.Concurrent.Lifted as C
 import           Control.Monad hiding (sequence)
 import           Control.Monad.Error.Class (MonadError(..))
+import           Control.Monad.Base()
 import           Control.Monad.IO.Class
 import           Control.Monad.Supply
 import           Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -22,9 +23,9 @@ import           Control.Monad.Writer.Class (MonadWriter(..), censor)
 import           Control.Monad.Writer.Strict (runWriterT)
 import           Data.Function (on)
 import           Data.Foldable (fold, for_)
-import           Data.List (foldl', sortOn)
+import           Data.List (foldl', sortOn, union)
 import qualified Data.List.NonEmpty as NEL
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe, isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -127,16 +128,32 @@ rebuildModule' MakeActions{..} exEnv externs m@(Module _ _ moduleName _ _) = do
 make :: forall m. (Monad m, MonadBaseControl IO m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
      => MakeActions m
      -> [CST.PartialResult Module]
-     -> m [ExternsFile]
-make ma@MakeActions{..} ms = do
-  checkModuleNames
+     -> Maybe ([ExternsFile], [CST.PartialResult Module], ModuleGraph, M.Map ModuleName Prebuilt)
+     -> Bool -- ^ Previously error occurred in watch
+     -> Bool -- ^ Watch
+     -> m ([ExternsFile], [CST.PartialResult Module], ModuleGraph, M.Map ModuleName Prebuilt, [CST.PartialResult Module])
+make ma@MakeActions{..} ms previous preError watch = do
+  -- Not check for uniqueness on rebuilding (watch mode)
+  unless (isJust previous) $ checkModuleNames
+
   cacheDb <- readCacheDb
 
-  (sorted, graph) <- sortModules Transitive (moduleSignature . CST.resPartial) ms
+  (sorted, graph) <-
+    if isJust previous
+      then let Just (_, pm, _, _) = previous
+          in sortModules Transitive (moduleSignature . CST.resPartial) (union ms pm)
+      else sortModules Transitive (moduleSignature . CST.resPartial) ms
 
-  (buildPlan, newCacheDb) <- BuildPlan.construct ma cacheDb (sorted, graph)
+  (buildPlan, newCacheDb) <-
+    if isJust previous
+      then do
+        let Just (_, _, _, pb) = previous
+        BuildPlan.constructSingle ma cacheDb ms pb
+      else BuildPlan.construct ma cacheDb (sorted, graph)
 
-  let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName . CST.resPartial) sorted
+  let toBeRebuilt = if isJust previous
+                       then ms
+                       else filter (BuildPlan.needsRebuild buildPlan . getModuleName . CST.resPartial) sorted
   for_ toBeRebuilt $ \m -> fork $ do
     let moduleName = getModuleName . CST.resPartial $ m
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup moduleName graph)
@@ -169,15 +186,53 @@ make ma@MakeActions{..} ms = do
   let errors = M.elems failures
   unless (null errors) $ throwError (mconcat errors)
 
+
+  -- Check If dependencies of module changed to be rebuild explicitly in watch mode
+  -- based on the current and previous externsFile
+  let allResults =
+        if isJust previous && not preError
+          then do
+            let Just (_, oldM, _, pb) = previous
+                mn = getModuleName . CST.resPartial . head $ ms
+                prevExternFile = BuildPlan.pbExternsFile <$> M.lookup mn pb
+                currentExternFile = M.lookup mn successes
+                prevDecl = efDeclarations <$> prevExternFile
+                currDecl = efDeclarations <$> currentExternFile
+            -- Don't compile the dependencies when previously error didn't occurred,
+            -- or nothing changed and even if new declaration added
+            if prevDecl == currDecl
+               -- || length currDecl > length prevDecl)
+              then []
+              else do
+                let graphN = filter (\(_, g) -> elem mn g) graph
+                    toM = map (\(m, _) -> m) graphN
+                filter (\oms -> elem (getModuleName . CST.resPartial $ oms) toM) oldM
+        else []
+
   -- Here we return all the ExternsFile in the ordering of the topological sort,
   -- so they can be folded into an Environment. This result is used in the tests
   -- and in PSCI.
   let lookupResult mn =
         fromMaybe (internalError "make: module not found in results")
         $ M.lookup mn successes
-  return (map (lookupResult . getModuleName . CST.resPartial) sorted)
+
+  -- Compute the new prebuilt that will be used for next run in case of watch.
+  prebuilt <- if watch
+                 then M.traverseMaybeWithKey prebuiltPrevious successes
+                 else return M.empty
+
+  return (map (lookupResult . getModuleName . CST.resPartial) sorted, sorted, graph, prebuilt, allResults )
 
   where
+
+  prebuiltPrevious :: ModuleName -> ExternsFile -> m (Maybe BuildPlan.Prebuilt)
+  prebuiltPrevious k mn = do
+    maybeOTS <- getOutputTimestamp k
+    return $ maybe
+              Nothing
+              (\oTS -> Just $ BuildPlan.Prebuilt oTS mn)
+              maybeOTS
+
   checkModuleNames :: m ()
   checkModuleNames = checkNoPrim *> checkModuleNamesAreUnique
 
