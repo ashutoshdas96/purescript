@@ -201,7 +201,6 @@ make ma@MakeActions{..} ms previous preError watch = do
             -- Don't compile the dependencies when previously error didn't occurred,
             -- or nothing changed and even if new declaration added
             if prevDecl == currDecl
-               -- || length currDecl > length prevDecl)
               then []
               else do
                 let graphN = filter (\(_, g) -> elem mn g) graph

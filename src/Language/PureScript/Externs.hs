@@ -159,13 +159,6 @@ data ExternsDeclaration =
   deriving (Show, Generic, Eq)
 
 instance Serialise ExternsDeclaration
--- =======
-  -- -- | A kind declaration
-  -- | EDKind
-  --     { edKindName                :: ProperName 'KindName
-  --     }
-  -- deriving (Show, Eq)
--- >>>>>>> ag/stable
 
 -- | Check whether the version in an externs file matches the currently running
 -- version.
